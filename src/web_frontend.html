@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🤖 Agent IA - Frontend</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; margin-bottom: 30px; }
+        .config { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+        button { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .audio-section { margin: 30px 0; }
+        .audio-controls { display: flex; gap: 10px; align-items: center; margin: 15px 0; }
+        #audioPlayer { width: 100%; margin: 10px 0; }
+        .response { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-top: 20px; min-height: 100px; }
+        .status { padding: 10px; border-radius: 5px; margin: 10px 0; }
+        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Agent IA - Frontend</h1>
+        
+        <!-- Configuration -->
+        <div class="config">
+            <h3>⚙️ Configuration</h3>
+            <div class="form-group">
+                <label for="apiUrl">🌐 URL du serveur Colab :</label>
+                <input type="text" id="apiUrl" value="https://your-ngrok-url.ngrok.io" placeholder="https://your-ngrok-url.ngrok.io">
+            </div>
+            <button class="btn-secondary" onclick="testConnection()">🔍 Tester</button>
+            <div id="status" class="status hidden"></div>
+        </div>
+
+        <!-- Audio Section -->
+        <div class="audio-section">
+            <h3>🎙️ Enregistrement Audio</h3>
+            <div class="audio-controls">
+                <button id="recordBtn" class="btn-danger" onclick="toggleRecording()">🎙️ Commencer</button>
+                <button id="playBtn" class="btn-secondary hidden" onclick="playAudio()">▶️ Écouter</button>
+                <button id="sendBtn" class="btn-success hidden" onclick="sendAudio()">🤖 Envoyer</button>
+                <button class="btn-secondary" onclick="clearHistory()">🗑️ Effacer</button>
+            </div>
+            <audio id="audioPlayer" controls class="hidden"></audio>
+        </div>
+
+        <!-- Response -->
+        <div class="response" id="response">
+            Agent IA prêt à vous écouter !<br>
+            <em>Configurez d'abord l'URL du serveur Colab.</em>
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let audioBlob;
+        let isRecording = false;
+
+        async function testConnection() {
+            const url = document.getElementById('apiUrl').value;
+            const status = document.getElementById('status');
+            
+            try {
+                const response = await fetch(url + '/');
+                if (response.ok) {
+                    status.className = 'status success';
+                    status.textContent = '✅ Connexion réussie !';
+                } else {
+                    status.className = 'status error';
+                    status.textContent = '❌ Erreur: ' + response.status;
+                }
+            } catch (error) {
+                status.className = 'status error';
+                status.textContent = '❌ Impossible de se connecter';
+            }
+            status.classList.remove('hidden');
+        }
+
+        async function toggleRecording() {
+            const recordBtn = document.getElementById('recordBtn');
+            
+            if (!isRecording) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    
+                    mediaRecorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+                    
+                    mediaRecorder.onstop = () => {
+                        audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        const audioPlayer = document.getElementById('audioPlayer');
+                        audioPlayer.src = audioUrl;
+                        audioPlayer.classList.remove('hidden');
+                        document.getElementById('playBtn').classList.remove('hidden');
+                        document.getElementById('sendBtn').classList.remove('hidden');
+                    };
+                    
+                    mediaRecorder.start();
+                    isRecording = true;
+                    recordBtn.textContent = '⏹️ Arrêter';
+                    recordBtn.className = 'btn-secondary';
+                } catch (error) {
+                    alert('Erreur micro: ' + error.message);
+                }
+            } else {
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                isRecording = false;
+                recordBtn.textContent = '🎙️ Commencer';
+                recordBtn.className = 'btn-danger';
+            }
+        }
+
+        function playAudio() {
+            document.getElementById('audioPlayer').play();
+        }
+
+        async function sendAudio() {
+            if (!audioBlob) {
+                alert('Aucun audio enregistré');
+                return;
+            }
+            
+            const url = document.getElementById('apiUrl').value;
+            const response = document.getElementById('response');
+            
+            response.textContent = '⏳ Traitement en cours...';
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', audioBlob, 'audio.wav');
+                
+                const apiResponse = await fetch(url + '/chat', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (apiResponse.ok) {
+                    const data = await apiResponse.json();
+                    response.innerHTML = `<strong>Vous:</strong> ${data.transcript}<br><br><strong>Agent IA:</strong> ${data.response}`;
+                } else {
+                    const errorText = await apiResponse.text();
+                    response.innerHTML = `<strong>Erreur API:</strong> ${apiResponse.status} - ${errorText}`;
+                }
+            } catch (error) {
+                response.innerHTML = `<strong>Erreur:</strong> ${error.message}`;
+            }
+        }
+
+        async function clearHistory() {
+            const url = document.getElementById('apiUrl').value;
+            try {
+                await fetch(url + '/clear', { method: 'POST' });
+                document.getElementById('response').textContent = 'Historique effacé !';
+            } catch (error) {
+                document.getElementById('response').textContent = 'Erreur lors de l\'effacement';
+            }
+        }
+    </script>
+</body>
+</html>

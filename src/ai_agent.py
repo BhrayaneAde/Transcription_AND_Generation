@@ -4,9 +4,10 @@ import gradio as gr
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from faster_whisper import WhisperModel
 
-# Configuration pour Colab
+# Configuration
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-torch.cuda.empty_cache()
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
 
 # Configuration des modèles
 WHISPER_MODEL = "large-v3"
@@ -44,13 +45,13 @@ def load_models():
 
 def transcribe_audio(audio_file) -> str:
     """STT avec Faster Whisper Large v3"""
-    load_models()
+    if not whisper_model:
+        load_models()
     
     try:
         if audio_file is None:
             return ""
         
-        # Transcription directe du fichier
         segments, _ = whisper_model.transcribe(
             audio_file, 
             language="fr", 
@@ -76,42 +77,36 @@ def generate_response(text: str) -> str:
         return ""
     
     try:
-        # Construire le prompt
         messages = [
-            {"role": "system", "content": "Tu es un assistant vocal français. Réponds de manière concise et naturelle."}
+            {"role": "system", "content": "Tu es un agent IA français intelligent. Réponds de manière précise et utile."}
         ]
         messages.extend(conversation_history[-6:])
         messages.append({"role": "user", "content": text})
         
-        # Formatage du prompt
         prompt = qwen_tokenizer.apply_chat_template(
             messages, 
             tokenize=False, 
             add_generation_prompt=True
         )
         
-        # Tokenisation
         inputs = qwen_tokenizer(prompt, return_tensors="pt")
         if torch.cuda.is_available():
             inputs = inputs.to("cuda")
         
-        # Génération
         with torch.no_grad():
             outputs = qwen_model.generate(
                 **inputs,
-                max_new_tokens=150,
+                max_new_tokens=200,
                 temperature=0.7,
                 do_sample=True,
                 pad_token_id=qwen_tokenizer.eos_token_id
             )
         
-        # Décodage
         response = qwen_tokenizer.decode(
             outputs[0][inputs.input_ids.shape[1]:], 
             skip_special_tokens=True
         ).strip()
         
-        # Mise à jour historique
         conversation_history.extend([
             {"role": "user", "content": text},
             {"role": "assistant", "content": response}
@@ -126,32 +121,33 @@ def generate_response(text: str) -> str:
         print(f"Erreur LLM: {e}")
         return "Je rencontre un problème technique."
 
-
-
 def process_audio(audio_file):
-    """Pipeline principal: Audio → Texte → Réponse"""
+    """Pipeline: Audio → Texte → Réponse IA"""
     if audio_file is None:
         return "Aucun audio détecté"
     
-    # STT
     transcript = transcribe_audio(audio_file)
     if not transcript:
         return "Transcription échouée"
     
     print(f"👂 Utilisateur: '{transcript}'")
     
-    # LLM
     response = generate_response(transcript)
     if not response:
-        return f"**Vous:** {transcript}\n\n**Assistant:** Erreur de génération"
+        return f"**Vous:** {transcript}\n\n**Agent IA:** Erreur de génération"
     
-    print(f"💬 Assistant: '{response}'")
+    print(f"🤖 Agent IA: '{response}'")
     
-    return f"**Vous:** {transcript}\n\n**Assistant:** {response}"
+    return f"**Vous:** {transcript}\n\n**Agent IA:** {response}"
+
+def clear_history():
+    """Effacer l'historique"""
+    global conversation_history
+    conversation_history.clear()
+    return "Historique effacé !"
 
 def create_interface():
-    """Interface Gradio pour agent IA"""
-    
+    """Interface Gradio"""
     with gr.Blocks(title="Agent IA - Qwen 2.5 7B", theme=gr.themes.Soft()) as interface:
         gr.Markdown("# 🤖 Agent IA avec Qwen 2.5 7B")
         gr.Markdown("**STT:** Faster Whisper Large v3 | **LLM:** Qwen 2.5 7B")
@@ -164,16 +160,16 @@ def create_interface():
                     label="🎙️ Parlez à l'agent IA"
                 )
                 
-                submit_btn = gr.Button("🤖 Analyser", variant="primary")
-                clear_btn = gr.Button("🗑️ Effacer historique", variant="secondary")
+                with gr.Row():
+                    submit_btn = gr.Button("🤖 Analyser", variant="primary")
+                    clear_btn = gr.Button("🗑️ Effacer", variant="secondary")
             
             with gr.Column():
                 text_output = gr.Markdown(
-                    label="📝 Conversation",
+                    label="💬 Conversation",
                     value="Agent IA prêt à vous écouter !"
                 )
         
-        # Actions
         submit_btn.click(
             fn=process_audio,
             inputs=[audio_input],
@@ -181,10 +177,8 @@ def create_interface():
         )
         
         clear_btn.click(
-            fn=lambda: "Historique effacé !",
+            fn=clear_history,
             outputs=[text_output]
-        ).then(
-            fn=lambda: conversation_history.clear()
         )
     
     return interface
@@ -192,21 +186,17 @@ def create_interface():
 def main():
     """Lancement de l'agent IA"""
     print("🚀 Initialisation de l'agent IA...")
-    print("📋 Chargement des modèles (peut prendre quelques minutes)...")
+    print("📋 Chargement des modèles...")
     
-    # Pré-chargement des modèles
     load_models()
     
     print("✅ Modèles prêts !")
-    print("🌐 Lancement de l'interface Gradio...")
+    print("🌐 Lancement de l'interface...")
     
-    # Interface Gradio
     interface = create_interface()
-    
-    # Lancement public pour Colab
     interface.launch(
-        share=True,
-        server_name="0.0.0.0",
+        share=False,
+        server_name="127.0.0.1",
         server_port=7860,
         show_error=True
     )

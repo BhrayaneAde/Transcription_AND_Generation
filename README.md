@@ -1,48 +1,73 @@
-# 🎤 Chatbot Vocal - Qwen 2.5 7B + Whisper Large v3
+# 🤖 Agent IA - Qwen 2.5 7B + Whisper Large v3
 
-Chatbot vocal intelligent utilisant les derniers modèles open-source :
+Agent IA intelligent avec architecture **Backend Colab + Frontend Local** :
 - **STT** : Faster Whisper Large v3
-- **LLM** : Qwen 2.5 7B Instruct (Hugging Face)
-- **TTS** : Edge TTS
-- **Interface** : Gradio
+- **LLM** : Qwen 2.5 7B Instruct (4-bit)
+- **Backend** : FastAPI sur Google Colab (GPU)
+- **Frontend** : Gradio local
+- **Tunnel** : ngrok
 
-## 🚀 Lancement sur Google Colab
+## 🚀 Déploiement Backend (Google Colab)
 
-### Option 1 : Notebook Colab (Recommandé)
-1. Ouvrez `colab_setup.ipynb` dans Google Colab
-2. Exécutez les cellules dans l'ordre
-3. L'interface Gradio se lancera automatiquement
+1. **Ouvrez `colab_backend.ipynb` dans Google Colab**
+2. **Activez le GPU** (Runtime → Change runtime type → GPU)
+3. **Exécutez la cellule** - Les modèles se téléchargent automatiquement
+4. **Copiez l'URL ngrok** affichée (ex: `https://abc123.ngrok.io`)
 
-### Option 2 : Script Python
-1. Uploadez `colab_voice_chatbot.py` sur Colab
-2. Installez les dépendances :
-   ```python
-   !pip install -r colab_requirements.txt
-   ```
-3. Lancez le script :
-   ```python
-   !python colab_voice_chatbot.py
-   ```
-
-## 💻 Installation Locale
+## 💻 Lancement Frontend (Local)
 
 ```bash
-pip install torch transformers faster-whisper gradio edge-tts pydub accelerate
-python src/colab_voice_chatbot.py
+# Installation
+pip install -r requirements_frontend.txt
+
+# Lancement
+python src/gradio_frontend.py
 ```
+
+1. **Ouvrez** http://127.0.0.1:7860
+2. **Collez l'URL ngrok** du backend Colab
+3. **Testez la connexion**
+4. **Commencez à parler** à l'agent IA !
 
 ## 🎯 Fonctionnalités
 
-- ✅ Reconnaissance vocale haute précision (Whisper Large v3)
-- ✅ Génération de texte avancée (Qwen 2.5 7B)
-- ✅ Synthèse vocale naturelle (Edge TTS français)
-- ✅ Interface web intuitive (Gradio)
-- ✅ Historique de conversation
-- ✅ Support GPU/CPU automatique
+- ✅ **Backend GPU** sur Google Colab (gratuit)
+- ✅ **Frontend local** responsive
+- ✅ **Reconnaissance vocale** haute précision (Whisper Large v3)
+- ✅ **LLM avancé** (Qwen 2.5 7B quantifié 4-bit)
+- ✅ **API REST** FastAPI avec CORS
+- ✅ **Tunnel sécurisé** ngrok
+- ✅ **Historique** de conversation
+- ✅ **Interface intuitive** Gradio
 
-## 📋 Exemples d'utilisation
+## 🏗️ Architecture
 
+```
+[Micro Local] → [Gradio Frontend] → [ngrok] → [Colab Backend] → [GPU Models]
+     ↓              ↓                  ↓           ↓              ↓
+   Audio         Interface          Tunnel     FastAPI      Whisper+Qwen
+```
+
+## 📋 Utilisation
+
+1. **Parlez dans le micro** du frontend local
+2. **L'audio est envoyé** au backend Colab via ngrok
+3. **Whisper transcrit** votre parole
+4. **Qwen génère** une réponse intelligente
+5. **Le texte s'affiche** dans l'interface locale
+
+### Exemples de questions :
 - "Bonjour, comment ça va ?"
 - "Explique-moi la photosynthèse"
 - "Raconte-moi une blague"
 - "Quel temps fait-il aujourd'hui ?"
+
+## 🔧 Configuration ngrok
+
+Pour un tunnel stable :
+1. Créez un compte sur [ngrok.com](https://ngrok.com)
+2. Récupérez votre token
+3. Dans le notebook Colab, remplacez :
+   ```python
+   ngrok.set_auth_token("YOUR_NGROK_TOKEN")
+   ```
