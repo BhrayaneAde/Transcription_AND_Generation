@@ -244,7 +244,7 @@ const App: React.FC = () => {
           }
         }
 
-        // continuer la vérification tant que isRecording true
+        // continuer la vérification tant que isRecording true pour la transcription
         if (isRecording) {
           requestAnimationFrame(check);
         }
