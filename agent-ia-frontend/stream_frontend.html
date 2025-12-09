@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Streaming ASR + LLM — Frontend</title>
+  <style>
+    :root{
+      --bg:#0f1724;
+      --card:#0b1220;
+      --accent:#06b6d4;
+      --muted:#94a3b8;
+      --text:#e6eef6;
+      --green:#10b981;
+    }
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg),#031025);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;}
+    .wrap{max-width:980px;margin:28px auto;padding:20px;}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:18px;border:1px solid rgba(255,255,255,0.04);box-shadow:0 6px 20px rgba(2,6,23,0.6);}
+    header{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-bottom:12px}
+    header h1{font-size:18px;margin:0;color:var(--text)}
+    .controls{display:flex;gap:8px}
+    button{background:linear-gradient(90deg,var(--accent),#60a5fa);border:none;padding:10px 14px;border-radius:10px;color:#032;cursor:pointer;font-weight:600}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--text)}
+    .status{font-size:13px;color:var(--muted)}
+    .layout{display:grid;grid-template-columns:1fr 420px;gap:16px;margin-top:12px}
+    .panel{padding:12px;border-radius:10px;background:rgba(255,255,255,0.015);min-height:320px;display:flex;flex-direction:column;gap:12px}
+    .panel h3{margin:0;color:var(--muted);font-size:13px}
+    .transcript, .response{flex:1;overflow:auto;padding:10px;border-radius:8px;background:rgba(0,0,0,0.15);color:var(--text);font-size:15px}
+    .partial{color:#fef08a}
+    .final{color:#a7f3d0}
+    .response p{margin:0;color:#c7d2fe}
+    .mini{font-size:12px;color:var(--muted)}
+    canvas{width:100%;height:64px;border-radius:8px;background:linear-gradient(90deg, rgba(255,255,255,0.01), rgba(255,255,255,0.015));display:block}
+    .footer{display:flex;justify-content:space-between;align-items:center;margin-top:12px;color:var(--muted);font-size:13px}
+    .dot{display:inline-block;width:10px;height:10px;border-radius:10px;margin-right:8px}
+    .dot.green{background:var(--green)}
+    .dot.red{background:#ef4444}
+    .log{font-family:monospace;font-size:12px;color:var(--muted);max-height:120px;overflow:auto;padding:8px;border-radius:8px;background:rgba(0,0,0,0.12)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <header>
+        <h1>Streaming ASR → LLM (WebSocket /ws)</h1>
+        <div class="controls">
+          <button id="startBtn">Démarrer</button>
+          <div class="status" id="connStatus">Connexion: <strong id="connText">—</strong></div>
+        </div>
+      </header>
+
+      <div class="layout">
+        <div class="panel">
+          <h3>Oscilloscope</h3>
+          <canvas id="wave" width="600" height="64"></canvas>
+
+          <h3>Transcription</h3>
+          <div class="transcript" id="transcriptBox">
+            <div class="mini">Partiel (<span id="partialCount">0</span>) :</div>
+            <div id="partials"></div>
+            <hr style="border:0;border-top:1px dashed rgba(255,255,255,0.04);margin:8px 0" />
+            <div class="mini">Final :</div>
+            <div id="finalText" class="final"></div>
+          </div>
+
+          <h3>Assistant (LLM)</h3>
+          <div class="response" id="responseBox"><p id="responseText">—</p></div>
+
+          <div class="footer">
+            <div><span class="dot red" id="micDot"></span><span id="micStatus">Micro inactif</span></div>
+            <div class="mini">Server WS: <span id="serverAddr">/ws</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Contrôle & Logs</h3>
+          <div class="mini">Réglages : chunk = <span id="chunkMs">1000</span> ms</div>
+          <div style="height:8px"></div>
+          <div class="log" id="logBox"></div>
+
+          <h3 style="margin-top:12px">Historique partiels</h3>
+          <div id="history" style="max-height:220px;overflow:auto"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    // Config
+    const CHUNK_MS = 1000; // durée en ms des chunks envoyés
+    const sampleRateTarget = 16000; // on encode WAV en 16k (server resample si besoin)
+    const SILENCE_THRESHOLD = 0.01; // Seuil RMS pour détecter le silence
+    const SILENCE_DURATION = 3000; // 3 secondes de silence
+    document.getElementById('chunkMs').textContent = CHUNK_MS;
+
+    // UI refs
+    const startBtn = document.getElementById('startBtn');
+    const connText = document.getElementById('connText');
+    const serverAddr = document.getElementById('serverAddr');
+    const partialsDiv = document.getElementById('partials');
+    const finalText = document.getElementById('finalText');
+    const responseText = document.getElementById('responseText');
+    const logBox = document.getElementById('logBox');
+    const historyBox = document.getElementById('history');
+    const partialCount = document.getElementById('partialCount');
+    const micDot = document.getElementById('micDot');
+    const micStatus = document.getElementById('micStatus');
+
+    // Canvas
+    const canvas = document.getElementById('wave');
+    const ctx = canvas.getContext('2d');
+
+    // WebSocket
+    let ws = null;
+    // 🔧 CONFIGURATION: Remplacez par votre URL de tunnel (ngrok, etc.)
+    const TUNNEL_URL = 'https://nondiocesan-tamar-gaunt.ngrok-free.dev';
+    
+    function connectWS(){
+      const url = TUNNEL_URL.replace(/^https?:\/\//, 'wss://') + '/ws';
+      serverAddr.textContent = url.replace(/^wss?:\/\//,'');
+      ws = new WebSocket(url);
+      ws.onopen = () => {
+        connText.textContent = "connecté";
+        connText.style.color = "#a7f3d0";
+        log("WS connecté");
+      };
+      ws.onclose = () => {
+        connText.textContent = "déconnecté";
+        connText.style.color = "#fb7185";
+        log("WS déconnecté");
+      };
+      ws.onerror = (e) => log("WS erreur: " + e.message || JSON.stringify(e));
+      ws.onmessage = (evt) => {
+        try{
+          const msg = JSON.parse(evt.data);
+          handleServerMessage(msg);
+        }catch(err){
+          log("Erreur parsing msg: "+err);
+        }
+      };
+    }
+    connectWS();
+
+    function log(text){
+      const now = new Date().toLocaleTimeString();
+      logBox.innerText = `[${now}] ${text}\n` + logBox.innerText;
+    }
+
+    // State audio
+    let mediaStream=null;
+    let audioContext=null;
+    let processor=null;
+    let inputNode=null;
+    let recordingBuffers = []; // Float32Array chunks accumulating
+    let recordingStart = 0;
+    let partialIndex = 0;
+    
+    // VAD (Voice Activity Detection)
+    let lastSoundTime = 0;
+    let silenceDetected = false;
+
+    // Helper: encode Float32 -> 16-bit PCM WAV (mono)
+    function floatTo16BitPCM(output, offset, input){
+      for (let i=0;i<input.length;i++,offset+=2){
+        let s = Math.max(-1, Math.min(1, input[i]));
+        s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        output.setInt16(offset, s, true);
+      }
+    }
+    function writeString(view, offset, string){
+      for (let i=0;i<string.length;i++){
+        view.setUint8(offset+i, string.charCodeAt(i));
+      }
+    }
+    function encodeWAV(samples, sampleRate){
+      const buffer = new ArrayBuffer(44 + samples.length * 2);
+      const view = new DataView(buffer);
+      /* RIFF identifier */
+      writeString(view, 0, 'RIFF');
+      /* file length */
+      view.setUint32(4, 36 + samples.length * 2, true);
+      /* RIFF type */
+      writeString(view, 8, 'WAVE');
+      /* format chunk identifier */
+      writeString(view, 12, 'fmt ');
+      /* format chunk length */
+      view.setUint32(16, 16, true);
+      /* sample format (raw) */
+      view.setUint16(20, 1, true);
+      /* channel count */
+      view.setUint16(22, 1, true);
+      /* sample rate */
+      view.setUint32(24, sampleRate, true);
+      /* byte rate (sampleRate * blockAlign) */
+      view.setUint32(28, sampleRate * 2, true);
+      /* block align (channel count * bytes per sample) */
+      view.setUint16(32, 2, true);
+      /* bits per sample */
+      view.setUint16(34, 16, true);
+      /* data chunk identifier */
+      writeString(view, 36, 'data');
+      /* data chunk length */
+      view.setUint32(40, samples.length * 2, true);
+      floatTo16BitPCM(view, 44, samples);
+      return new Blob([view], { type: 'audio/wav' });
+    }
+
+    // Downsample Float32Array to targetRate
+    function downsampleBuffer(buffer, srcRate, dstRate){
+      if (dstRate === srcRate) return buffer;
+      const sampleRateRatio = srcRate / dstRate;
+      const newLength = Math.round(buffer.length / sampleRateRatio);
+      const result = new Float32Array(newLength);
+      let offsetResult = 0;
+      let offsetBuffer = 0;
+      while (offsetResult < result.length) {
+        const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+        let accum = 0, count = 0;
+        for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++){
+          accum += buffer[i]; count++;
+        }
+        result[offsetResult] = count ? accum / count : 0;
+        offsetResult++;
+        offsetBuffer = nextOffsetBuffer;
+      }
+      return result;
+    }
+
+    // Handle server messages
+    function handleServerMessage(msg){
+      if (msg.type === 'partial_transcript'){
+        const el = document.createElement('div');
+        el.className = 'partial';
+        el.textContent = msg.text;
+        partialsDiv.prepend(el);
+        partialCount.textContent = ++partialIndex;
+        historyBox.prepend(el.cloneNode(true));
+      } else if (msg.type === 'final_transcript'){
+        finalText.textContent = msg.text;
+        log("Final transcript received");
+      } else if (msg.type === 'response'){
+        responseText.textContent = msg.text;
+        log("LLM response received");
+      } else if (msg.type === 'response_chunk'){
+        // Streaming token par token
+        responseText.textContent += msg.text;
+      } else if (msg.type === 'audio_levels'){
+        // optional: display amplitude
+        drawWaveformLevel(msg.rms || 0);
+      } else {
+        // unknown
+        // log("Server: " + JSON.stringify(msg));
+      }
+    }
+
+    // Draw a simple RMS bar on canvas
+    function drawWaveformLevel(rms){
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0,0,w,h);
+      ctx.fillStyle = 'rgba(255,255,255,0.03)';
+      ctx.fillRect(0,0,w,h);
+      ctx.fillStyle = '#06b6d4';
+      const barW = Math.max(2, Math.min(w, rms * w * 10));
+      ctx.fillRect(0,0,barW,h);
+    }
+
+    // Start capture
+    startBtn.addEventListener('click', async ()=>{
+      if (!ws || ws.readyState !== WebSocket.OPEN){
+        log("WS pas connecté — tentative de reconnexion...");
+        connectWS();
+        await new Promise(r => setTimeout(r, 300));
+      }
+
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+        try{
+          mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          await audioContext.audioWorklet?.resume?.();
+          const src = audioContext.createMediaStreamSource(mediaStream);
+
+          // ScriptProcessor fallback (AudioWorklet would be cleaner but more code)
+          const bufferSize = 4096;
+          processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+          const srcSampleRate = audioContext.sampleRate;
+          log(`AudioContext SR: ${srcSampleRate} Hz`);
+          micDot.className = 'dot green';
+          micStatus.textContent = 'Micro actif';
+
+          let accum = [];
+          let accumLen = 0;
+          let lastSend = performance.now();
+
+          processor.onaudioprocess = (evt) => {
+            const input = evt.inputBuffer.getChannelData(0);
+            // copy
+            const chunk = new Float32Array(input.length);
+            chunk.set(input);
+            accum.push(chunk);
+            accumLen += chunk.length;
+
+            // Draw a tiny waveform (use RMS)
+            let rms = 0;
+            for (let i=0;i<input.length;i++){ rms += input[i]*input[i]; }
+            rms = Math.sqrt(rms / input.length);
+            drawWaveformLevel(rms);
+
+            // If enough time passed, flush chunk
+            const now = performance.now();
+            if (now - lastSend >= CHUNK_MS){
+              lastSend = now;
+              // merge accum into one Float32Array
+              let merged = new Float32Array(accumLen);
+              let offset = 0;
+              for (let b of accum){ merged.set(b, offset); offset += b.length; }
+              accum = []; accumLen = 0;
+              sendFloat32Chunk(merged, srcSampleRate);
+            }
+          };
+
+          src.connect(processor);
+          processor.connect(audioContext.destination);
+          recordingStart = Date.now();
+          startBtn.disabled = true;
+          stopBtn.disabled = false;
+          log("Enregistrement démarré");
+        }catch(err){
+          log("Erreur getUserMedia: " + err.message);
+        }
+      } else {
+        log("getUserMedia non supporté");
+      }
+    });
+
+    // Stop capture
+    stopBtn.addEventListener('click', async ()=>{
+      try{
+        // flush any remaining buffers by creating a final short chunk
+        if (processor && audioContext){
+          processor.disconnect();
+          audioContext.close();
+        }
+        if (mediaStream){
+          mediaStream.getTracks().forEach(t => t.stop());
+        }
+        micDot.className = 'dot red';
+        micStatus.textContent = 'Micro inactif';
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        log("Enregistrement arrêté, envoi final en cours...");
+
+        // send final small silence chunk to mark end; create empty buffer
+        const finalBuffer = new Float32Array(0);
+        // we still want to send the final recorded combined audio for best final transcript:
+        // instead of sending only the last chunk we accumulated, we instruct the client to re-record the last N seconds?
+        // Simpler: rely on server-side final audio sent by app (we send last chunk as final here)
+        sendFinalSignal();
+
+      }catch(err){
+        log("Erreur stop: " + err);
+      }
+    });
+
+    // Send a Float32Array chunk (encode to 16k WAV)
+    async function sendFloat32Chunk(float32arr, srcSampleRate){
+      try{
+        // Downsample to sampleRateTarget (16k) for smaller data and server standard
+        const down = downsampleBuffer(float32arr, srcSampleRate, sampleRateTarget);
+        const wavBlob = encodeWAV(down, sampleRateTarget);
+        const arrayBuffer = await wavBlob.arrayBuffer();
+        const base64 = arrayBufferToBase64(arrayBuffer);
+
+        if (ws && ws.readyState === WebSocket.OPEN){
+          const payload = JSON.stringify({ type: 'audio_chunk', data: base64 });
+          ws.send(payload);
+          log("Chunk envoyé (" + Math.round(wavBlob.size/1024) + " KB)");
+        } else {
+          log("WS non ouvert, chunk non envoyé");
+        }
+      }catch(e){
+        log("Erreur envoi chunk: " + e);
+      }
+    }
+
+    // Send final signal (empty or short silence to trigger audio_final)
+    async function sendFinalSignal(){
+      try{
+        // create 200ms silence 16k
+        const length = Math.round(sampleRateTarget * 0.2);
+        const sil = new Float32Array(length);
+        const wavBlob = encodeWAV(sil, sampleRateTarget);
+        const arrayBuffer = await wavBlob.arrayBuffer();
+        const base64 = arrayBufferToBase64(arrayBuffer);
+        if (ws && ws.readyState === WebSocket.OPEN){
+          ws.send(JSON.stringify({ type: 'audio_final', data: base64 }));
+          log("audio_final envoyé");
+        } else {
+          log("WS non ouvert, final non envoyé");
+        }
+      }catch(e){
+        log("Erreur sendFinal: " + e);
+      }
+    }
+
+    // Utility: arrayBuffer -> base64
+    function arrayBufferToBase64(buffer){
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    }
+
+    // reconnect on page visible again?
+    document.addEventListener('visibilitychange', ()=>{
+      if (document.visibilityState === 'visible' && (!ws || ws.readyState !== WebSocket.OPEN)){
+        connectWS();
+      }
+    });
+
+    // expose small helpers for debugging
+    window._log = log;
+    window._ws = () => ws;
+  })();
+  </script>
+</body>
+</html>
